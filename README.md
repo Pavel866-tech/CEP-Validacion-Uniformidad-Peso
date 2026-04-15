@@ -8,7 +8,7 @@ Características Principales:
 •Validación de Normalidad: Uso de Shapiro-Wilk y Gráficos Q-Q.
 •Fase I y II: Diferenciación entre límites de control y monitoreo de nuevos datos.
 •Detección de Violaciones: Identificación automática de puntos fuera de límites y rachas.
-•Clasificación de Estados (A-D): Diagnóstico ejecutivo basado en estabilidad (St) y capacidad (Ppk).
+•Clasificación de Estados (A-D): Diagnóstico ejecutivo basado en gráficos de control de Shewhart e índices de potencialidad.
 
 Requisitos:
 Se requiere R y las librerías: `qcc`, `ggplot2`, `dplyr`.
