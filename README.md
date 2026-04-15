@@ -1,7 +1,7 @@
 Implementación de SPC para la Validación de Uniformidad de Peso
 
 Descripción:
-Este proyecto automatiza el Control Estadístico de Procesos (SPC) para el pesado de tabletas, 
+Este proyecto automatiza el Control Estadístico de Procesos (CEP) para el pesado de tabletas, 
 enfocado en el cumplimiento de la NOM-059 y criterios de integridad de datos.
 
 Características Principales:
