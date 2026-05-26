@@ -1,0 +1,468 @@
+---
+title: "Análisis de Uniformidad de Pesos de Tabletas"
+author: "Pavel Burgueño Camarena"
+date: "`r format(Sys.Date(), '%d de %B de %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+# Introducción
+
+El presente proyecto implementa un sistema de Control Estadístico de Procesos (SPC, Statistical Process Control) aplicado a la uniformidad de peso de tabletas en la industria farmacéutica. La uniformidad de peso constituye un atributo crítico de calidad (CQA, Critical Quality Attribute) cuya variación puede comprometer directamente la eficacia terapéutica y la seguridad del paciente, al implicar desviaciones en la cantidad de principio activo entregada en cada unidad de dosificación.
+
+El desarrollo del proyecto responde a los requerimientos establecidos por la NOM-059-SSA1-2015 (numeral 6.2) y la NOM-164-SSA1-2015 (numeral 9.9.2.3.2), que exigen la implementación de controles estadísticos en proceso y sistemas de detección de variabilidad durante la fabricación comercial, en el marco de la Verificación Continua del Proceso (CPV, Continued Process Verification). Estos requerimientos son consistentes con las directrices de la ICH Q9(R1) (Anexo I, Sección A.1.4), que recomienda el uso de gráficas de control de Shewhart para el monitoreo y la toma de decisiones basada en datos, y con la ICH Q10 (sección 3.2.1), que establece la necesidad de métodos estadísticamente apropiados para la detección temprana de desviaciones en el desempeño del proceso (ICH, 2008, 2023; Secretaría de Salud, 2015).
+
+El análisis se estructura en dos fases: una Fase I de calibración, en la que se verifican los supuestos de normalidad y estabilidad estadística y se calculan los índices de capacidad de proceso (Cp, Cpk); y una Fase II de monitoreo, en la que se detectan desviaciones mediante gráficas X-barra, R, EWMA y CUSUM, se calculan los índices de desempeño a largo plazo (Pp, Ppk) y se clasifica el estado del proceso conforme al esquema A/B/C/D de Gutiérrez Pulido & De la Vara Salazar (2009). 
+
+Dado que los datos generados durante la fabricación farmacéutica constituyen información confidencial protegida por acuerdos de no divulgación, los datos fueron generados mediante simulación estocástica con parámetros representativos de un proceso real de compresión de tabletas, garantizando la reproducibilidad íntegra del análisis sin comprometer la confidencialidad de ninguna organización.
+
+```{r}
+# Cargar librerías
+library(qcc)
+library(ggplot2)
+library(dplyr)
+
+set.seed(123)
+
+LIE           <- 490    # Límite Inferior de Especificación (mg)
+LSE           <- 510    # Límite Superior de Especificación (mg)
+PESO_OBJETIVO <- 500    # Target nominal (mg)
+UMBRAL_CAP    <- 1.50   # Cpk/Ppk mínimo - clase mundial
+
+n_subgrupos <- 25
+tamaño_subgrupo <- 5
+n_fase1 <- 10
+n_fase2 <- 15
+
+datos_fase1 <- matrix(rnorm(n_fase1 * tamaño_subgrupo, mean = 500, sd = 2),
+                         ncol = tamaño_subgrupo)
+
+tendencia <- seq(0, 1.4, length.out = n_fase2)
+
+datos_fase2 <- do.call(rbind, lapply(tendencia, function(d) {
+  rnorm(tamaño_subgrupo, mean = 500 + d, sd = 2)
+}))
+
+datos_totales <- rbind(datos_fase1, datos_fase2)
+```
+
+# Comprobación de Normalidad en Fase I
+
+```{r}
+# Gráfica Q-Q clásica
+
+qqnorm(as.vector(datos_fase1), 
+       main = "Gráfico Q-Q de Pesos de Tabletas",
+       xlab = "Cuantiles Teóricos",
+       ylab = "Cuantiles Observados",
+       pch = 16,
+       cex = 0.9)
+
+qqline(as.vector(datos_fase1), col = "red", lwd = 2)
+
+# Prueba de Normalidad (Shapiro-Wilk)
+
+shapiro_fase1 <- shapiro.test(as.vector(datos_fase1))
+print(shapiro_fase1)
+
+cat(
+  if (shapiro_fase1$p.value > 0.05) {
+    "Datos Normales: Procede el análisis de capacidad estándar.\n"
+  } else {
+    "Datos No Normales: Considerar transformación Box-Cox o índices no paramétricos.\n"
+  }
+)
+```
+
+# Verificación de estabilidad en Fase I
+
+```{r}
+xbar_fase1 <- qcc(datos_totales[1:10, ], type = "xbar", 
+                  xlab = "Subgrupo", 
+                  ylab = "Peso Promedio (mg)", 
+                  title = "Control de Medias: Fase I")
+
+r_fase1 <- qcc(datos_totales[1:10, ], type = "R",
+               xlab = "Subgrupo", 
+               ylab = "Rango de pesos (mg)", 
+               title = "Control de Rangos: Fase I")
+```
+
+# Análisis de Capacidad
+
+```{r}
+capacidad_fase1 <- process.capability(xbar_fase1, 
+                   spec.limits = c(LIE, LSE), 
+                   target = PESO_OBJETIVO,
+                   add.stats = FALSE,
+                   print = FALSE)
+```
+
+# 4) Gráficas X-barra/R Fase I + II
+
+```{r}
+grafica_xbar <- qcc(datos_totales[1:10, ], type = "xbar",
+                  newdata = datos_totales[11:25, ],
+                  xlab = "Subgrupo", 
+                  ylab = "Peso Promedio (mg)",
+                  title = "Control de Medias: Fase I y II")
+
+grafica_r <- qcc(datos_totales[1:10, ], type = "R",
+                 newdata = datos_totales[11:25, ],
+                 xlab = "Subgrupo",
+                 ylab = "Rango de pesos (mg)",
+                 title = "Control de Variabilidad (R): Fase I y II")
+```
+
+# Gráficos EWMA y CUSUM
+
+```{r}
+grafico_ewma <- ewma(
+  data = datos_fase1,        # Datos de calibración
+  newdata = datos_fase2,     # Datos de monitoreo
+  lambda = 0.2,              # Factor de suavizado (común: 0.05 a 0.25)
+  nsigmas = 3,               # Límites de control a 3 sigmas
+  title = "Gráfico EWMA: Monitoreo de Pequeñas Desviaciones en el Peso",
+  xlab = "Subgrupo",
+  ylab = "Promedio Móvil Ponderado"
+)
+
+grafico_cusum <- cusum(
+  data = datos_fase1,        # Base para calcular la media y desviación estándar
+  newdata = datos_fase2,     # Evaluación de la tendencia
+  decision.interval = 5,     # H: Intervalo de decisión (común: 4 o 5)
+  se.shift = 1,              # K: Magnitud del cambio a detectar (en sigmas)
+  title = "Gráfico CUSUM: Detección de Derivas en Proceso de Tableteado",
+  xlab = "Subgrupo",
+  ylab = "Suma Acumulativa"
+)
+```
+
+# Verificación de violaciones
+
+```{r}
+fuera_de_limites_xbar <- grafica_xbar$violations$beyond.limits
+rachas_invalidas_xbar <- grafica_xbar$violations$violating.runs
+fuera_de_limites_r <- grafica_r$violations$beyond.limits
+rachas_invalidas_r <- grafica_r$violations$violating.runs
+
+cat("Subgrupos fuera de límites de control (X-barra):",
+    length(fuera_de_limites_xbar),
+    "\nSubgrupos en rachas no aleatorias (X-barra):  ",
+    length(rachas_invalidas_xbar),
+    "\nSubgrupos fuera de límites de control (R):    ",
+    length(fuera_de_limites_r),
+    "\nSubgrupos en rachas no aleatorias (R):        ",
+    length(rachas_invalidas_r), "\n")
+
+datos_afectados <- sort(unique(c(fuera_de_limites_xbar, rachas_invalidas_xbar)))
+
+tabla_violaciones <- data.frame(
+  Subgrupo           = datos_afectados,
+  Fase               = ifelse(datos_afectados <= n_fase1, "Fase I", "Fase II"),
+  Media_SG           = round(apply(datos_totales[datos_afectados, ], 1, mean), 4),
+  Rango_SG           = round(apply(datos_totales[datos_afectados, ], 1,
+                                   function(x) diff(range(x))), 4),
+  Fuera_de_Limites   = datos_afectados %in% fuera_de_limites_xbar,
+  Racha_No_Aleatoria = datos_afectados %in% rachas_invalidas_xbar
+)
+
+print(tabla_violaciones)
+
+fuera_de_limites_ewma  <- grafico_ewma$violations
+fuera_de_limites_cusum <- grafico_cusum$violations
+
+cat("Subgrupos fuera de límites de control (EWMA): ",
+    length(fuera_de_limites_ewma),
+    "\nSubgrupos fuera de límites de control (CUSUM): ",
+    length(fuera_de_limites_cusum))
+```
+
+# Índices de Rendimiento del Proceso Pp y Ppk
+
+```{r}
+media_global <- mean(datos_totales)
+sd_global <- sd(as.vector(datos_totales))
+
+Pp <- (LSE - LIE) / (6 * sd_global)
+Ppk_u <- (LSE - media_global) / (3 * sd_global)
+Ppk_l <- (media_global - LIE) / (3 * sd_global)
+Ppk <- min(Ppk_u, Ppk_l)
+
+cat("Media Global:", media_global, "\n")
+cat("Desviación Estándar Global:", sd_global, "\n")
+cat("Pp:", Pp, "\n")
+cat("Ppk:", Ppk, "\n")
+
+tabla_indices <- data.frame(
+  Indice  = c("Cp", "Cpk", "Pp", "Ppk"),
+  Alcance = c("Corto plazo — Fase I", "Corto plazo — Fase I",
+              "Largo plazo — Global", "Largo plazo — Global"),
+  Base_DE = c("R-barra/d2 (within)", "R-barra/d2 (within)",
+              "s global (total)",    "s global (total)"),
+  Valor   = round(c(
+    capacidad_fase1$indices["Cp",   "Value"],
+    capacidad_fase1$indices["Cp_k", "Value"],
+    Pp, Ppk
+  ), 4),
+  Cumple  = ifelse(c(
+    capacidad_fase1$indices["Cp",   "Value"],
+    capacidad_fase1$indices["Cp_k", "Value"],
+    Pp, Ppk
+  ) >= UMBRAL_CAP,
+  paste0("Sí (>= ", UMBRAL_CAP, ")"),
+  paste0("No (<  ", UMBRAL_CAP, ")"))
+)
+
+cat("\nTabla Comparativa — Índices de Capacidad y Desempeño:\n")
+print(tabla_indices)
+```
+
+# Comparación de Distribuciones (Antes Vs. Después)
+
+```{r}
+# Construcción correcta del data.frame
+df_hist <- data.frame(
+  Peso   = c(as.vector(datos_fase1), as.vector(datos_fase2)),
+  Estado = c(rep("Fase I — Bajo Control",     n_fase1 * tamaño_subgrupo),
+             rep("Fase II — Fuera de Control", n_fase2 * tamaño_subgrupo))
+)
+
+# Estadísticos por fase para anotaciones
+media_f1 <- mean(datos_fase1)
+media_f2 <- mean(datos_fase2)
+sd_f1    <- sd(as.vector(datos_fase1))
+sd_f2    <- sd(as.vector(datos_fase2))
+
+# Densidad máxima aproximada para posicionar anotaciones verticales
+dens_f1 <- density(as.vector(datos_fase1))
+dens_f2 <- density(as.vector(datos_fase2))
+y_max_f1 <- max(dens_f1$y)
+y_max_f2 <- max(dens_f2$y)
+
+ggplot(df_hist, aes(x = Peso, fill = Estado)) +
+  
+  # Curvas de densidad
+  geom_density(alpha = 0.45, linewidth = 0.6, color = "white") +
+  
+  # Límites de especificación
+  geom_vline(xintercept = LIE,
+             linetype = "dashed", color = "#e74c3c", linewidth = 0.9) +
+  geom_vline(xintercept = LSE,
+             linetype = "dashed", color = "#e74c3c", linewidth = 0.9) +
+  
+  # Target nominal
+  geom_vline(xintercept = PESO_OBJETIVO,
+             linetype = "solid", color = "#2c3e50", linewidth = 0.8) +
+  
+  # Medias de cada fase
+  geom_vline(xintercept = media_f1,
+             linetype = "dotted", color = "#2980b9", linewidth = 0.9) +
+  geom_vline(xintercept = media_f2,
+             linetype = "dotted", color = "#e67e22", linewidth = 0.9) +
+  
+  # Etiquetas de límites de especificación
+  annotate("text", x = LIE, y = y_max_f1 * 1.05,
+           label = paste("LIE =", LIE, "mg"),
+           hjust = 1.1, size = 3.2, color = "#e74c3c") +
+  annotate("text", x = LSE, y = y_max_f1 * 1.05,
+           label = paste("LSE =", LSE, "mg"),
+           hjust = -0.1, size = 3.2, color = "#e74c3c") +
+  
+  # Etiqueta del target
+  annotate("text", x = PESO_OBJETIVO, y = y_max_f1 * 1.12,
+           label = paste("Target =", PESO_OBJETIVO, "mg"),
+           hjust = 0.5, size = 3.2, color = "#2c3e50") +
+  
+  # Etiquetas de medias con estadísticos
+  annotate("text", x = media_f1, y = y_max_f1 * 0.60,
+           label = paste0("X\u0305 = ", round(media_f1, 2),
+                          " mg\nDE = ", round(sd_f1, 2), " mg"),
+           hjust = 1.1, size = 3.0, color = "#2980b9") +
+  annotate("text", x = media_f2, y = y_max_f2 * 0.60,
+           label = paste0("X\u0305 = ", round(media_f2, 2),
+                          " mg\nDE = ", round(sd_f2, 2), " mg"),
+           hjust = -0.1, size = 3.0, color = "#e67e22") +
+  
+  # Paleta de colores coherente con el proyecto
+  scale_fill_manual(values = c(
+    "Fase I — Bajo Control"      = "#7fb3d3",
+    "Fase II — Fuera de Control" = "#e59866"
+  )) +
+  
+  # Escala X con marcas en LIE, LSE y target
+  scale_x_continuous(
+    breaks = sort(unique(c(seq(488, 514, by = 2), LIE, LSE, PESO_OBJETIVO))),
+    limits = c(488, 514)
+  ) +
+  
+  labs(
+    title    = "Impacto del Desvío en la Distribución de Pesos de Tabletas",
+    subtitle = paste0(
+      "Fase I: \u03bc = ", round(media_f1, 2),
+      " mg, DE = ", round(sd_f1, 2),
+      " mg  |  Fase II: \u03bc = ", round(media_f2, 2),
+      " mg, DE = ", round(sd_f2, 2), " mg"
+    ),
+    x    = "Peso de Tableta (mg)",
+    y    = "Densidad",
+    fill = "Estado del Proceso"
+  ) +
+  
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title      = element_text(face = "bold", color = "#1a5276", size = 14),
+    plot.subtitle   = element_text(color = "#555555", size = 10),
+    legend.position = "top",
+    legend.title    = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    axis.text.x     = element_text(angle = 45, hjust = 1, size = 8)
+  )
+```
+
+# Clasificación del Estado del Proceso
+
+```{r}
+# --- Criterios lógicos de clasificación --------------------------------------
+# Es estable si no hay subgrupos afectados por violaciones en X-barra
+es_estable <- length(datos_afectados) == 0
+
+# Es capaz si el índice de desempeño a largo plazo Ppk >= UMBRAL_CAP (1.50)
+# Referencia: Gutiérrez Pulido & De la Vara Salazar (2009), 2a ed.
+es_capaz <- Ppk >= UMBRAL_CAP
+
+# --- Clasificación A / B / C / D ---------------------------------------------
+if (es_estable && es_capaz) {
+  
+  estado_proceso <- "ESTADO A (Ideal)"
+  diagnostico <- paste0(
+    "Proceso ESTABLE y CAPAZ. El proceso es estadísticamente predecible ",
+    "y cumple con las especificaciones de producto de manera consistente."
+  )
+  accion <- paste0(
+    "Mantener condiciones actuales. Continuar monitoreo rutinario ",
+    "con gráficas de control."
+  )
+  
+} else if (es_estable && !es_capaz) {
+  
+  estado_proceso <- "ESTADO B (No Capaz)"
+  diagnostico <- paste0(
+    "Proceso ESTABLE pero NO CAPAZ. El proceso es predecible, ",
+    "pero su variabilidad intrínseca es excesiva para las especificaciones."
+  )
+  accion <- paste0(
+    "Investigar fuentes de variabilidad estructural. Aplicar herramientas ",
+    "de mejora (DOE, Seis Sigma) para reducir la variación del proceso."
+  )
+  
+} else if (!es_estable && es_capaz) {
+  
+  estado_proceso <- "ESTADO C (Inestable)"
+  diagnostico <- paste0(
+    "Proceso CAPAZ pero INESTABLE. Los índices de capacidad cumplen el ",
+    "umbral requerido (Ppk >= ", UMBRAL_CAP, "), pero existen causas ",
+    "especiales de variación que comprometen la predictibilidad del proceso."
+  )
+  accion <- paste0(
+    "Identificar y eliminar las causas asignables detectadas. ",
+    "Emitir CAPA formal. Reevaluar la capacidad tras restablecer el control. Aplicar la estrategia de las 6M."
+  )
+  
+} else {
+  
+  estado_proceso <- "ESTADO D (Crítico)"
+  diagnostico <- paste0(
+    "Proceso INESTABLE y NO CAPAZ. El proceso no es estadísticamente ",
+    "predecible y genera producto fuera de especificación (OOS)."
+  )
+  accion <- paste0(
+    "Detener la producción de inmediato. Iniciar investigación de causa raíz. ",
+    "Emitir CAPA formal. No liberar producto sin revisión de Control de Calidad."
+  )
+  
+}
+
+# --- Reporte Final Ejecutivo -------------------------------------------------
+separador <- paste0(rep("-", 55), collapse = "")
+
+cat(separador, "\n")
+cat("REPORTE FINAL — CONTROL ESTADÍSTICO DE PROCESOS\n")
+cat(separador, "\n")
+
+cat(sprintf("Estado Identificado : %s\n", estado_proceso))
+cat(sprintf("Diagnóstico         : %s\n", diagnostico))
+cat(sprintf("Acción Recomendada  : %s\n", accion))
+
+cat(separador, "\n")
+cat("MÉTRICAS CLAVE\n")
+cat(separador, "\n")
+
+cat(sprintf("  Cp  (Fase I — corto plazo)      : %.3f  %s\n",
+            capacidad_fase1$indices["Cp",   "Value"],
+            ifelse(capacidad_fase1$indices["Cp",   "Value"] >= UMBRAL_CAP,
+                   "[CUMPLE]", "[NO CUMPLE]")))
+
+cat(sprintf("  Cpk (Fase I — corto plazo)      : %.3f  %s\n",
+            capacidad_fase1$indices["Cp_k", "Value"],
+            ifelse(capacidad_fase1$indices["Cp_k", "Value"] >= UMBRAL_CAP,
+                   "[CUMPLE]", "[NO CUMPLE]")))
+
+cat(sprintf("  Pp  (Global — largo plazo)      : %.3f  %s\n",
+            Pp,
+            ifelse(Pp  >= UMBRAL_CAP, "[CUMPLE]", "[NO CUMPLE]")))
+
+cat(sprintf("  Ppk (Global — largo plazo)      : %.3f  %s\n",
+            Ppk,
+            ifelse(Ppk >= UMBRAL_CAP, "[CUMPLE]", "[NO CUMPLE]")))
+
+cat(sprintf("  Umbral adoptado (clase mundial) : %.2f\n", UMBRAL_CAP))
+
+cat(separador, "\n")
+cat("VIOLACIONES DETECTADAS\n")
+cat(separador, "\n")
+
+cat(sprintf("  Subgrupos X-barra fuera de LC   : %d\n",
+            length(fuera_de_limites_xbar)))
+cat(sprintf("  Rachas no aleatorias (X-barra)  : %d\n",
+            length(rachas_invalidas_xbar)))
+cat(sprintf("  Subgrupos R fuera de LC         : %d\n",
+            length(fuera_de_limites_r)))
+cat(sprintf("  Rachas no aleatorias (R)        : %d\n",
+            length(rachas_invalidas_r)))
+cat(sprintf("  Subgrupos EWMA fuera de LC      : %d\n",
+            length(fuera_de_limites_ewma)))
+cat(sprintf("  Subgrupos CUSUM fuera de LC     : %d\n",
+            length(fuera_de_limites_cusum)))
+cat(sprintf("  Total subgrupos afectados       : %d de %d\n",
+            length(datos_afectados), n_subgrupos))
+
+cat(separador, "\n")
+cat("PROCESO BAJO ANÁLISIS\n")
+cat(separador, "\n")
+
+cat(sprintf("  Subgrupos Fase I (calibración)  : %d\n", n_fase1))
+cat(sprintf("  Subgrupos Fase II (monitoreo)   : %d\n", n_fase2))
+cat(sprintf("  Tamaño de subgrupo (n)          : %d tabletas\n",
+            tamaño_subgrupo))
+cat(sprintf("  LIE                             : %g mg\n", LIE))
+cat(sprintf("  LSE                             : %g mg\n", LSE))
+cat(sprintf("  Target nominal                  : %g mg\n", PESO_OBJETIVO))
+cat(sprintf("  Media global observada          : %.4f mg\n", media_global))
+cat(sprintf("  DE global (largo plazo)         : %.4f mg\n", sd_global))
+
+cat(separador, "\n")
+```
+
+El proceso demuestra una capacidad técnica de clase mundial tanto en el corto plazo (Cp = 1.848, Cpk = 1.835) como en el largo plazo (Pp = 1.826, Ppk = 1.743), superando en todos los casos el umbral adoptado de 1.50. La diferencia mínima entre Cp y Cpk (0.013) confirma que el proceso está prácticamente centrado respecto al target de 500 mg, y la media global observada de 500.454 mg se mantiene dentro de los límites de especificación (490–510 mg) con una desviación estándar global de 1.825 mg.
+
+Sin embargo, la ausencia de puntos fuera de límites de control en las gráficas X-barra y R contrasta con la detección de 4 rachas no aleatorias en X-barra, confirmadas de forma independiente por 1 señal en EWMA y 2 señales en CUSUM. Este patrón es la firma estadística característica de una tendencia gradual sostenida, consistente con causas asignables como desgaste progresivo de punzones o variación lenta en las propiedades del material a comprimir. La sensibilidad diferencial entre métodos es en sí misma diagnósticamente valiosa: mientras que la gráfica X-barra no activó ninguna alarma de Regla 1, EWMA y CUSUM — diseñadas para detectar desplazamientos acumulativos de 1–2σ — sí captaron la deriva, confirmando que el desplazamiento es de pequeña magnitud pero sostenido en el tiempo.
+
+El proceso se clasifica en Estado C: Capaz pero Inestable. Es técnicamente capaz de producir tabletas dentro de especificación, pero la evidencia estadística convergente de tres métodos independientes señala la presencia de una causa asignable activa que compromete su predictibilidad. De no atenderse, la tendencia detectada desplazará progresivamente la distribución del proceso hacia los límites de especificación, constituyendo un riesgo de calidad creciente conforme a los principios de la ICH Q9(R1) (ICH, 2023).
+Se establecen tres acciones regulatorias prioritarias: (1) investigación de causa raíz mediante diagrama de Ishikawa con enfoque en las 6M; (2) emisión de CAPA formal conforme a la NOM-059-SSA1-2015; y (3) reevaluación de la capacidad una vez restablecido el control estadístico. La detección temprana de esta tendencia —antes de generar producto fuera de especificación— evidencia el valor del sistema de monitoreo implementado en el marco de la Verificación Continua del Proceso, conforme a la FDA Process Validation Guidance (2011) y la ICH Q10 (ICH, 2008).
