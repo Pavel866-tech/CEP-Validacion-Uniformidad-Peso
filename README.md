@@ -164,4 +164,17 @@ Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo `LICENSE` 
 
 ## Autor
 
-**Pavel Burgueño Camarena**  
+**Pavel Burgueño Camarena**
+
+## Uso de Inteligencia Artificial
+
+Este proyecto fue desarrollado con el apoyo de **Claude Sonnet** (Anthropic) 
+como herramienta de asistencia. Su uso se detalla a continuación:
+
+- **Generación de código**: Apoyo en la implementación de código en R
+- **Documentación**: Redacción y revisión de comentarios y este README
+- **Debugging**: Identificación y solución de errores
+- **Refactorización**: Mejora de la estructura y legibilidad del código
+
+Todas las sugerencias fueron revisadas, adaptadas y validadas manualmente. 
+El diseño, la arquitectura y las decisiones finales son responsabilidad del autor.
